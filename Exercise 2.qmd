@@ -1,0 +1,78 @@
+---
+title: "Exercise 2"
+format: html
+---
+
+
+
+Delete R memory
+```{r}
+rm(list=ls())
+```
+
+#Week 2
+## Task 1 - Import data
+
+```{r}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(sf)
+library(terra)
+library(tmap)
+library(gitcreds)
+library(dplyr)
+```
+
+
+## Demo
+```{r}
+now <- Sys.time()
+now
+
+later <- now + 1000
+
+later - now
+
+
+difftime(later, now, units = "mins")
+
+difference <- as.numeric(difftime(later, now, units = "mins"))
+
+str(difference)
+
+# demonstrate lead and lag
+mynumbers <- 1:10 
+mynumbers 
+
+lead(mynumbers)
+
+lead(mynumbers) - mynumbers 
+
+lead(mynumbers,2) #second value gives how long the offset should be (lag)
+
+#lag() is the opposite of the lead() function
+
+lag(mynumbers)
+
+
+wildschwein <- tibble(
+    TierID = c(rep("Hans", 5), rep("Klara", 5)),
+    DatetimeUTC = rep(as.POSIXct("2015-01-01 00:00:00", tz = "UTC") + 0:4 * 15 * 60, 2))
+
+wildschwein
+
+wildschwein$timelag <- as.numeric(difftime(lead(wildschwein$DatetimeUTC), wildschwein$DatetimeUTC))
+
+wildschwein$timelag
+
+wildschwein <- wildschwein |> 
+  group_by(TierID) |> 
+  mutate(diff = as.numeric())
+
+```
+
+## 
+
+
+
