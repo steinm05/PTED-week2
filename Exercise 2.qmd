@@ -8,10 +8,11 @@ format: html
 Delete R memory
 ```{r}
 rm(list=ls())
+
 ```
 
-#Week 2
-## Task 1 - Import data
+#Demo Week 2
+## Import data
 
 ```{r}
 library(readr)
@@ -25,7 +26,6 @@ library(dplyr)
 ```
 
 
-## Demo
 ```{r}
 now <- Sys.time()
 now
@@ -60,19 +60,443 @@ wildschwein <- tibble(
     TierID = c(rep("Hans", 5), rep("Klara", 5)),
     DatetimeUTC = rep(as.POSIXct("2015-01-01 00:00:00", tz = "UTC") + 0:4 * 15 * 60, 2))
 
-wildschwein
+str(wildschwein)
 
+#find the timelag 
 wildschwein$timelag <- as.numeric(difftime(lead(wildschwein$DatetimeUTC), wildschwein$DatetimeUTC))
 
 wildschwein$timelag
 
+
+#simplify operation
+#You might have noticed that timelag is calculated across different individuals (Hans and Klara), which does not make much sense. To avoid this, we need to specify that timelag should just be calculated between consecutive rows of the same individual. We can implement this by using group_by().
+
 wildschwein <- wildschwein |> 
   group_by(TierID) |> 
-  mutate(diff = as.numeric())
+  mutate(timelag = as.numeric(difftime(lead(DatetimeUTC), DatetimeUTC)))
+
+wildschwein #stimmt so
+
+#get metrics per animal
+summarise(wildschwein, mean = mean(timelag, na.rm = T))
+
+#for sf objects using summarise can take a long time, use st_drop_geometry() first, before summarising sf objects
 
 ```
 
-## 
+## Demo - Bring it all together
+```{r}
+pigs <- tibble(
+    TierID = c(8001, 8003, 8004, 8005, 8800, 8820, 3000, 3001, 3002, 3003, 8330, 7222),
+    sex = c("M", "M", "M", "F", "M", "M", "F", "F", "M", "F", "M", "F"),
+    age = c("A", "A", "J", "A", "J", "J", "J", "A", "J", "J", "A", "A"),
+    weight = c(50.755, 43.409, 12.000, 16.787, 20.987, 25.765, 22.0122, 21.343, 12.532, 54.32, 11.027, 88.08)
+)
+
+pigs
+
+pigs |>
+    summarise(
+        mean_weight = mean(weight)
+    )
+
+pigs |>
+    group_by(sex) |>
+    summarise(
+        mean_weight = mean(weight)
+    )
+
+
+pigs |>
+    group_by(sex, age) |>
+    summarise(
+        mean_weight = mean(weight)
+    )
+
+```
+
+#Excercise Week 2
+Delete R memory
+```{r}
+rm(list=ls())
+
+```
+
+
+## Load libraries
+
+```{r}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(sf)
+library(terra)
+library(tmap)
+library(gitcreds)
+library(dplyr)
+
+```
+
+
+
+## Task 1: Import your data
+```{r}
+wildschwein_BE <- read_delim("wildschwein_BE_2056.csv", ",")
+
+wildschwein_BE <- st_as_sf(wildschwein_BE, coords = c("E", "N"), crs = 2056, remove = FALSE)
+
+#Dataset now converted to EPSG 2056
+
+```
+
+
+## Task 2: Getting an overview
+```{r}
+#Datenset anschauen: 
+wildschwein_BE
+
+wildschwein_BE$TierID |> unique() #finde heraus wie viele einzelne individuelle TierID's es in diesem Datenset gibt: 
+#"002A" "016A" "018A"
+
+#das gleiche mit Tier Name: 
+wildschwein_BE$TierName |> unique()
+#"Sabi" "Rosa" "Ruth"
+
+#In total three individuala were tracked.
+
+#Daten plotten:
+ggplot(wildschwein_BE, aes(DatetimeUTC, TierName))+
+         geom_point()
+#there are no gaps in the tracking, but not all individuals were tracked for the same amount of time, the longest tracking period spans from October 2014 to July 2015
+#individuals were tracked concurrently
+```
+
+Calculate the time difference between subsequent rows
+```{r}
+wildschwein <- wildschwein_BE |> 
+  group_by(TierName) |> 
+  mutate(timelag = difftime(lead(DatetimeUTC), DatetimeUTC))
+#diff_s ist neue Variable in welcher die Zeitdifferenzen je Tier gespeichert werden
+
+#nachschauen ob diff_s jetzt existiert 
+wildschwein
+
+#units in seconds, but actually that is already set as default (?)
+wildschwein_s <- wildschwein_BE |> 
+  group_by(TierName) |> 
+  mutate(diff_s = as.integer(difftime(lead(DatetimeUTC), DatetimeUTC, units == "secs")))
+
+#Frequenzen der Zeitdifferenzen plotten (Zeitdifferenz in Minuten)
+ggplot(wildschwein, aes(timelag/60))+
+  geom_histogram(binwidth = 1)+
+  lims(x=c(0,5000/60))+
+  scale_y_log10()
+ 
+#it seems there is not one temporal sampling interval between locations, the time intervals between locations change, we see a high frequency of around 15s, 30s and 60s intervals
+
+
+wildschwein_f <- wildschwein |> 
+  filter(DatetimeUTC < "2014-09-01") 
+  
+  
+ggplot(wildschwein_f, aes(DatetimeUTC, timelag, colour=TierName))+
+  geom_point()+geom_line()
+#sampling frequency differece during day or night! 
+
+```
+
+
+
+
+## Task 3: Deriving movement patterns I: speed
+
+```{r}
+#Vorbereitung
+N1 <- 1204752
+N2 <- 1204863
+E1 <- 2570409
+E2 <- 2570402
+
+sqrt((E1 - E2)^2 + (N1 - N2)^2)
+
+
+#Formel generalisiert
+wildschwein_s <- wildschwein_s |> 
+  group_by(TierName) |> 
+  mutate(steplength = sqrt((E - lead(E))^2 + (N - lead(N))^2))
+
+
+ws <- wildschwein_s |> 
+  mutate(speed_ms = steplength/diff_s) #speed unit m/s
+
+#Verteilung der Geschwindigkeit anschauen
+hist(log10(ws$speed_ms), 100)
+
+```
+
+
+## Task 4 - Cross-scale movement analysis
+Reducing the granularity of the data by subsetting the data to every nth element, on a dataset that includes 200 locations of a single wild boar with a constant sampling interval of 60 seconds.
+
+clear
+```{r}
+rm(list=ls())
+```
+
+libraries
+```{r}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(sf)
+library(terra)
+library(tmap)
+library(gitcreds)
+library(dplyr)
+```
+
+
+
+Import dataset caro
+```{r}
+caro <- read_csv("caro60.csv")
+caro
+str(caro)
+```
+Convert it to a spatial object
+```{r}
+caro <- st_as_sf(caro, coords = c("E", "N"), crs = 2056, remove = FALSE)
+```
+
+Approach 1: 
+```{r}
+caro_3 <- caro |> 
+  seq(from = 1, to = 200, by = 3) |> 
+  slice()
+
+#Does not work
+```
+
+Approach 2: set up the sequences first
+```{r}
+seq_3 <- seq(from = 1, to = 200, by = 3)
+seq_6 <- seq(from = 1, to = 200, by = 6)
+seq_9 <- seq(from = 1, to = 200, by = 9)
+```
+
+Now slice
+```{r}
+caro_3 <- dplyr::slice(caro, seq_3)
+caro_6 <- dplyr::slice(caro, seq_6)
+caro_9 <- dplyr::slice(caro, seq_9)
+
+
+#Check:
+nrow(caro) #200
+nrow(caro_3)#67
+nrow(caro_6)#34
+nrow(caro_9)#23
+```
+
+Calculate timelag, steplength and speed for these data sets
+
+Caro
+```{r}
+#Timelag 
+caro <- caro |> 
+  mutate(diff_s = as.integer(difftime(lead(DatetimeUTC), DatetimeUTC, units == "secs")))
+
+
+#Steplength
+caro <- caro |> 
+  mutate(steplength = sqrt((E - lead(E))^2 + (N - lead(N))^2))
+
+
+#Speed
+
+caro <- caro |> 
+  mutate(speed_ms = steplength/diff_s)
+
+#Check out histogram for speed frequencies
+hist(log10(caro$speed_ms), 100)
+
+```
+
+
+Caro_3
+```{r}
+#Timelag 
+caro_3 <- caro_3 |> 
+  mutate(diff_s = as.integer(difftime(lead(DatetimeUTC), DatetimeUTC, units == "secs")))
+
+
+#Steplength
+caro_3 <- caro_3 |> 
+  mutate(steplength = sqrt((E - lead(E))^2 + (N - lead(N))^2))
+
+
+#Speed
+
+caro_3 <- caro_3 |> 
+  mutate(speed_ms = steplength/diff_s)
+
+#Check out histogram for speed frequencies
+hist(log10(caro_3$speed_ms), 100)
+
+```
+
+
+Caro_6
+```{r}
+#Timelag 
+caro_6 <- caro_6 |> 
+  mutate(diff_s = as.integer(difftime(lead(DatetimeUTC), DatetimeUTC, units == "secs")))
+
+
+#Steplength
+caro_6 <- caro_6 |> 
+  mutate(steplength = sqrt((E - lead(E))^2 + (N - lead(N))^2))
+
+
+#Speed
+
+caro_6 <- caro_6 |> 
+  mutate(speed_ms = steplength/diff_s)
+
+#Check out histogram for speed frequencies
+hist(log10(caro_6$speed_ms), 100)
+
+```
+
+Caro_9
+```{r}
+#Timelag 
+caro_9 <- caro_9 |> 
+  mutate(diff_s = as.integer(difftime(lead(DatetimeUTC), DatetimeUTC, units == "secs")))
+
+
+#Steplength
+caro_9 <- caro_9 |> 
+  mutate(steplength = sqrt((E - lead(E))^2 + (N - lead(N))^2))
+
+
+#Speed
+caro_9 <- caro_9 |> 
+  mutate(speed_ms = steplength/diff_s)
+
+#Check out histogram for speed frequencies
+hist(log10(caro_9$speed_ms), 100)
+
+```
+
+Compare the speeds visually in a line plot 
+
+Combine data
+```{r}
+caro_3 <- caro_3 |> 
+  mutate(interval_len = "3 minutes")
+
+caro_6 <- caro_6 |> 
+  mutate(interval_len = "6 minutes")
+
+caro_9 <- caro_9 |> 
+  mutate(interval_len = "9 minutes")
+
+caro <- caro |> 
+  mutate(interval_len = "1 minute")
+
+caro_all <- rbind(caro, caro_3, caro_6, caro_9)
+
+
+caro_all
+```
+
+Compare interval lengths in line plot
+
+```{r}
+ggplot(caro_all, aes(DatetimeUTC, diff_s, colour=interval_len))+
+  geom_point()+geom_line() #thats not what I wanted...but we can see the differences in the intervalls in different colours, that works, nice!
+```
+
+Again
+```{r}
+ggplot() +
+  geom_path(data = caro_all, aes(E, N, colour = interval_len))+
+  theme_minimal() +
+   scale_color_manual(name = "Trajectory",
+                     values = c("1 minute" = "orange", "3 minutes" = "lightgreen", "6 minutes" = "lightblue", "9 minutes" = "violet" )) +
+  labs(title = "Comparing original- with n-minutes resampled data")
+
+```
+When comparing the different interval lenghts it gets clear, that as the interval gets bigger, more and more information is lost. When we see 3 edges at 1 minute intervalls, we only have a straight line already at 3 minutes interval. It depends on the research question, if this information is important or not. But even for a question of homeranges, the 9 minutes interval leaves too scarce information. The best interval length to choose for homeranges is probably somewhere between 3 and 6 minutes. 
+
+
+
+Comparing derived speed at different sampling intervalls 
+```{r}
+ggplot() +
+  geom_line(data = caro_all, aes(DatetimeUTC, speed_ms, color = interval_len))+
+  theme_minimal() +
+   scale_color_manual(name = "Trajectory",
+                     values = c("1 minute" = "orange", "3 minutes" = "lightgreen", "6 minutes" = "lightblue", "9 minutes" = "violet" )) +
+  labs(title = "Comparing derived speed at different sampling intervalls")
+```
+
+# Task 6 & 7 Add your movement data to your repository and exlplore it
+
+clear
+```{r}
+rm(list=ls())
+```
+
+libraries
+```{r}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(sf)
+library(terra)
+library(tmap)
+library(gitcreds)
+library(dplyr)
+```
+
+Explore movement data
+```{r}
+posmo_1 <- read_csv("data/posmo_1.csv")
+posmo_1 <- st_as_sf(posmo_1, coords = c("lon_x", "lat_y"), crs = 2056, remove = FALSE)
+posmo_1
+
+#posmo_1 <- st_as_sf(posmo_1, coords = c("lon_x", "lat_y"), crs = 4326, remove = FALSE)
+
+
+```
+
+Make a map
+```{r}
+ggplot() +
+  geom_path(data = posmo_1, aes(lon_x, lat_y, colour = transport_mode))+
+  theme_minimal() +
+  labs(title = "Personal trajectory over two weeks")#but there is no map...
+```
+With map using ggplot
+```{r}
+ggplot() +
+  geom_sf(data = posmo_1, aes(col = transport_mode)) +
+  theme_minimal()
+```
+
+Create a map using tmap
+```{r}
+tmap_mode("view")
+
+tm_shape(posmo_1) +
+  tm_bubbles(col = "transport_mode")
+
+```
+
+
+
 
 
 
